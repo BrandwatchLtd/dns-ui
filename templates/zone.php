@@ -252,17 +252,28 @@ global $output_formatter;
 					<div class="pull-right">
 						<?php if($active_user->admin || $active_user->access_to($zone) == 'administrator') { ?>
 						<?php if($invalid_count == 0) { ?>
+						<?php if($update->approved) { ?>
+						<button type="submit" name="apply_update" value="<?php out($update->id)?>" class="btn btn-xs btn-success"><span class="glyphicon glyphicon-fire"></span> Apply</button>
+						<?php } else { ?>
 						<button type="submit" name="approve_update" value="<?php out($update->id)?>" class="btn btn-xs btn-success"><span class="glyphicon glyphicon-ok"></span> Approve</button>
+						<?php } ?>
 						<?php } else { ?>
 						<span class="text-danger">Update conflicts with more recent changes in this zone</span>
 						<?php } ?>
 						<input type="hidden" name="reject_reason">
 						<button type="submit" name="reject_update" value="<?php out($update->id)?>" class="btn btn-xs btn-danger"><span class="glyphicon glyphicon-remove"></span> Reject</button>
 						<?php } elseif($update->author->id == $active_user->id) { ?>
+						<?php if($update->approved) { ?>
+						<button type="submit" name="apply_update" value="<?php out($update->id)?>" class="btn btn-xs btn-success"><span class="glyphicon glyphicon-fire"></span> Apply</button>
+						<?php } ?>
 						<button type="submit" name="cancel_update" value="<?php out($update->id)?>" class="btn btn-xs btn-danger"><span class="glyphicon glyphicon-trash"></span> Cancel request</button>
 						<?php } ?>
 					</div>
 					<h3 class="panel-title">Change #<?php out($update->id)?> requested by <?php out($update->author->name)?> on <?php out($update->request_date->format('Y-m-d H:i:s'))?></h3>
+					<?php if($update->approved) { ?>
+					<h3 class="panel-title">and approved by <?php out($update->approver->name)?> on <?php out($update->approval_date->format('Y-m-d H:i:s'))?></h3>
+					<?php } ?>
+
 				</div>
 				<div class="panel-body">
 					<?php
@@ -650,6 +661,7 @@ global $output_formatter;
 					<th>Date / time</th>
 					<th>Comment</th>
 					<th>Requester</th>
+					<th>Approver</th>
 					<th>Author</th>
 					<th>Changes</th>
 					<th></th>
@@ -661,6 +673,7 @@ global $output_formatter;
 					<td class="nowrap"><?php out($changeset->change_date->format('Y-m-d H:i:s'))?></td>
 					<td><?php out($output_formatter->changeset_comment_format($changeset->comment), ESC_NONE) ?></td>
 					<td class="nowrap"><?php if($changeset->requester) { ?><a href="<?php outurl('/users/'.urlencode($changeset->requester->uid))?>"><?php out($changeset->requester->name)?><?php } ?></td>
+					<td class="nowrap"><?php if($changeset->approver) { ?><a href="<?php outurl('/users/'.urlencode($changeset->approver->uid))?>"><?php out($changeset->approver->name)?><?php } ?></td>
 					<td class="nowrap"><a href="<?php outurl('/users/'.urlencode($changeset->author->uid))?>"><?php out($changeset->author->name)?></td>
 					<td><?php out('-'.$changeset->deleted.'/+'.$changeset->added)?></td>
 					<td></td>

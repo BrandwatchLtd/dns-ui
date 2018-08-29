@@ -323,11 +323,13 @@ class Zone extends Record {
 		global $active_user;
 		$comment = $changeset->comment;
 		$requester_id = is_null($changeset->requester) ? null : $changeset->requester->id;
-		$stmt = $this->database->prepare('INSERT INTO "changeset" (zone_id, author_id, requester_id, change_date, comment, added, deleted) VALUES (?, ?, ?, NOW(), ?, 0, 0)');
+		$approver_id = is_null($changeset->approver) ? null : $changeset->approver->id;
+		$stmt = $this->database->prepare('INSERT INTO "changeset" (zone_id, author_id, requester_id, approver_id, change_date, comment, added, deleted) VALUES (?, ?, ?, ?, NOW(), ?, 0, 0)');
 		$stmt->bindParam(1, $this->id, PDO::PARAM_INT);
 		$stmt->bindParam(2, $active_user->id, PDO::PARAM_INT);
 		$stmt->bindParam(3, $requester_id, PDO::PARAM_INT);
-		$stmt->bindParam(4, $comment, PDO::PARAM_STR);
+		$stmt->bindParam(4, $approver_id, PDO::PARAM_INT);
+		$stmt->bindParam(5, $comment, PDO::PARAM_STR);
 		$stmt->execute();
 		$changeset->id = $this->database->lastInsertId('changeset_id_seq');
 	}
@@ -345,6 +347,7 @@ class Zone extends Record {
 		while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 			$row['author'] = $user_dir->get_user_by_id($row['author_id']);
 			$row['requester'] = (is_null($row['requester_id']) ? null : $user_dir->get_user_by_id($row['requester_id']));
+			$row['approver'] = (is_null($row['approver_id']) ? null : $user_dir->get_user_by_id($row['approver_id']));
 			$row['change_date'] = DateTime::createFromFormat('Y-m-d H:i:s.u', $row['change_date']);
 			$changesets[] = new ChangeSet($row['id'], $row);
 		}
@@ -364,6 +367,8 @@ class Zone extends Record {
 		$stmt->execute();
 		if($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 			$row['author'] = $user_dir->get_user_by_id($row['author_id']);
+			$row['requester'] = (is_null($row['requester_id']) ? null : $user_dir->get_user_by_id($row['requester_id']));
+			$row['approver'] = (is_null($row['approver_id']) ? null : $user_dir->get_user_by_id($row['approver_id']));
 			$row['change_date'] = DateTime::createFromFormat('Y-m-d H:i:s.u', $row['change_date']);
 			return new ChangeSet($row['id'], $row);
 		}
@@ -455,6 +460,19 @@ class Zone extends Record {
 	}
 
 	/**
+	* Approve a requested (pending) update to this zone.
+	* @param string $update JSON-encoded update
+	*/
+	public function approve_pending_update($update) {
+		global $active_user;
+		$stmt = $this->database->prepare('UPDATE pending_update SET approver_id = ?, approval_date = NOW(), approved = true WHERE zone_id = ? and id = ?');
+		$stmt->bindParam(1, $active_user->id, PDO::PARAM_INT);
+		$stmt->bindParam(2, $this->id, PDO::PARAM_INT);
+		$stmt->bindParam(3, $update->id, PDO::PARAM_INT);
+		$stmt->execute();
+	}
+
+	/**
 	* Delete a requested (pending) update from this zone.
 	* @param PendingUpdate $update to delete
 	*/
@@ -471,6 +489,7 @@ class Zone extends Record {
 	* @throws PendingUpdateNotFound if no update exists with the specified ID
 	*/
 	public function get_pending_update_by_id($id) {
+		global $user_dir;
 		$stmt = $this->database->prepare('SELECT * FROM pending_update WHERE zone_id = ? AND id = ?');
 		$stmt->bindParam(1, $this->id, PDO::PARAM_INT);
 		$stmt->bindParam(2, $id, PDO::PARAM_INT);
@@ -480,6 +499,9 @@ class Zone extends Record {
 			$update->author = new User($row['author_id']);
 			$update->request_date = DateTime::createFromFormat('Y-m-d H:i:s.u', $row['request_date']);
 			$update->raw_data = stream_get_contents($row['raw_data']);
+			$update->approved = (bool)$row['approved'];
+			$update->approver = (is_null($row['approver_id']) ? null : $user_dir->get_user_by_id($row['approver_id']));
+			$update->approval_date = (is_null($row['approval_date']) ? null : DateTime::createFromFormat('Y-m-d H:i:s.u', $row['approval_date']));
 			return $update;
 		}
 		throw new PendingUpdateNotFound;
@@ -490,6 +512,7 @@ class Zone extends Record {
 	* @return array of PendingUpdate objects
 	*/
 	public function list_pending_updates() {
+		global $user_dir;
 		$stmt = $this->database->prepare('SELECT * FROM pending_update WHERE zone_id = ?');
 		$stmt->bindParam(1, $this->id, PDO::PARAM_INT);
 		$stmt->execute();
@@ -499,6 +522,9 @@ class Zone extends Record {
 			$update->author = new User($row['author_id']);
 			$update->request_date = DateTime::createFromFormat('Y-m-d H:i:s.u', $row['request_date']);
 			$update->raw_data = stream_get_contents($row['raw_data']);
+			$update->approved = (bool)$row['approved'];
+			$update->approver = (is_null($row['approver_id']) ? null : $user_dir->get_user_by_id($row['approver_id']));
+			$update->approval_date = (is_null($row['approval_date']) ? null : DateTime::createFromFormat('Y-m-d H:i:s.u', $row['approval_date']));
 			$updates[] = $update;
 		}
 		return $updates;
@@ -649,7 +675,7 @@ class Zone extends Record {
 	* Given a JSON-encoded string with a list of changes to be made to a zone, process and perform those changes.
 	* @param string $update JSON-encoded list of changes
 	*/
-	public function process_bulk_json_rrset_update($update, $author = null) {
+	public function process_bulk_json_rrset_update($update, $author = null, $approver = null) {
 		global $active_user, $config, $zone_dir;
 		$rrsets = $this->list_resource_record_sets();
 		ini_set('memory_limit', '512M');
@@ -681,8 +707,14 @@ class Zone extends Record {
 		if(!empty($update->comment)) {
 			$changeset->comment = $update->comment;
 		}
+		$git_commit_footer = "";
 		if(!is_null($author)) {
 			$changeset->requester = $author;
+			$git_commit_footer .= "\nRequested by: ".$author->name;
+		}
+		if(!is_null($approver)) {
+			$changeset->approver = $approver;
+			$git_commit_footer .= "\nApproved by: ".$approver->name;
 		}
 		$this->commit_changes();
 		$this->add_changeset($changeset);
@@ -702,6 +734,7 @@ class Zone extends Record {
 		if(!empty($update->comment)) {
 			$git_commit_comment .= "\nChange comment: {$update->comment}";
 		}
+		$git_commit_comment .= $git_commit_footer;
 		$zone_dir->git_tracked_export(array_merge(array($this), $revs_updated), $git_commit_comment);
 		$alert = new UserAlert;
 		$alert->content = "Zone updated successfully.";
