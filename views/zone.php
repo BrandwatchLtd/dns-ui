@@ -124,19 +124,51 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 			$update = $zone->get_pending_update_by_id($_POST['approve_update']);
 		} catch(PendingUpdateNotFound $e) {
 			$alert = new UserAlert;
-			$alert->content = "This update has already been processed.";
+			$alert->content = "This update has already been applied or rejected.";
+			$alert->class = "warning";
+			$active_user->add_alert($alert);
+			redirect();
+		}
+		if($update->approved) {
+			$alert = new UserAlert;
+			$alert->content = "This update has already been approved.";
+			$alert->class = "warning";
+			$active_user->add_alert($alert);
+			redirect();
+		}
+		$zone->approve_pending_update($update);
+		$mail = new Email;
+		$mail->add_recipient($update->author->email, $update->author->name);
+		$mail->add_reply_to($active_user->email, $active_user->name);
+		$mail->subject = "Approved: DNS change request #{$update->id} for ".punycode_to_utf8($zone->name)." zone";
+		$mail->body = "Your change request #{$update->id} for the ".punycode_to_utf8($zone->name)." zone was approved.";
+		$mail->send();
+		redirect();
+	} elseif(isset($_POST['apply_update']) && ($active_user->admin || $active_user->access_to($zone) == 'administrator')) {
+		try {
+			$update = $zone->get_pending_update_by_id($_POST['apply_update']);
+		} catch(PendingUpdateNotFound $e) {
+			$alert = new UserAlert;
+			$alert->content = "This update has already been applied.";
+			$alert->class = "warning";
+			$active_user->add_alert($alert);
+			redirect();
+		}
+		if(!$update->approved) {
+			$alert = new UserAlert;
+			$alert->content = "This update has not been approved yet.";
 			$alert->class = "warning";
 			$active_user->add_alert($alert);
 			redirect();
 		}
 		try {
-			$zone->process_bulk_json_rrset_update($update->raw_data, $update->author);
+			$zone->process_bulk_json_rrset_update($update->raw_data, $update->author, $update->approver);
 			$zone->delete_pending_update($update);
 			$mail = new Email;
 			$mail->add_recipient($update->author->email, $update->author->name);
 			$mail->add_reply_to($active_user->email, $active_user->name);
 			$mail->subject = "Approved: DNS change request #{$update->id} for ".punycode_to_utf8($zone->name)." zone";
-			$mail->body = "Your change request #{$update->id} for the ".punycode_to_utf8($zone->name)." zone was approved.";
+			$mail->body = "Your change request #{$update->id} for the ".punycode_to_utf8($zone->name)." zone was applied.";
 			$mail->send();
 			redirect();
 		} catch(ResourceRecordInvalid $e) {
